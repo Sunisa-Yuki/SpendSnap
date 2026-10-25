@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -11,6 +13,7 @@ from receipt_ai import (
     validate_receipt,
 )
 from spending import amount_for_item, categorize_item, line_item_sum
+from storage import StorageError, load_receipts, save_receipts
 
 
 class ReceiptValidationTests(unittest.TestCase):
@@ -201,6 +204,23 @@ class SpendingTests(unittest.TestCase):
             8.5,
         )
         self.assertIsNone(line_item_sum([{"name": "Unknown price"}]))
+
+
+class StorageTests(unittest.TestCase):
+    def test_receipts_round_trip_and_missing_file_is_empty(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "data" / "receipts.json"
+            self.assertEqual(load_receipts(path), [])
+            receipts = [{"merchant": "Campus Cafe", "total": 6.25, "items": []}]
+            save_receipts(receipts, path)
+            self.assertEqual(load_receipts(path), receipts)
+
+    def test_corrupt_file_raises_instead_of_returning_empty(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "receipts.json"
+            path.write_text("{not json", encoding="utf-8")
+            with self.assertRaises(StorageError):
+                load_receipts(path)
 
 
 if __name__ == "__main__":

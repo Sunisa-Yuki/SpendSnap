@@ -10,6 +10,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from receipt_ai import ReceiptAIError, extract_receipt, prepare_receipt_image
+from storage import StorageError, load_receipts, save_receipts
 from spending import (
     CATEGORIES,
     amount_for_item,
@@ -65,12 +66,17 @@ def edited_items_to_records(frame: pd.DataFrame) -> list[dict[str, Any]]:
         category = row.get("Category")
         if category not in CATEGORIES:
             category = categorize_item(name)
+        quantity = optional_float("Quantity")
+        unit_price = optional_float("Unit price")
+        line_total = optional_float("Line total")
+        if unit_price is None and quantity is not None and quantity > 0 and line_total is not None:
+            unit_price = round(line_total / quantity, 2)
         records.append(
             {
                 "name": name,
-                "quantity": optional_float("Quantity"),
-                "unit_price": optional_float("Unit price"),
-                "line_total": optional_float("Line total"),
+                "quantity": quantity,
+                "unit_price": unit_price,
+                "line_total": line_total,
                 "category": category,
             }
         )
@@ -135,7 +141,12 @@ st.markdown(
 )
 
 if "receipts" not in st.session_state:
-    st.session_state.receipts = []
+    try:
+        st.session_state.receipts = load_receipts()
+    except StorageError as exc:
+        # Stop instead of starting empty, so the next save can't overwrite the file.
+        st.error(f"{exc} Fix or move that file, then refresh the page.")
+        st.stop()
 if "pending_receipt" not in st.session_state:
     st.session_state.pending_receipt = None
 
@@ -481,10 +492,14 @@ with scan_tab:
         else:
             visible_sum = line_item_sum(reviewed_items)
             if reported_total is not None and visible_sum is not None:
-                if abs(reported_total - visible_sum) > 0.02:
+                check_tax = parse_manual_number(tax_text) or 0
+                check_tip = parse_manual_number(tip_text) or 0
+                expected_total = visible_sum + check_tax + check_tip
+                if round(abs(reported_total - expected_total), 2) > 0.01:
                     st.warning(
-                        f"Line items add up to {visible_sum:.2f}, while the "
-                        f"reported receipt total is {reported_total:.2f}. "
+                        f"Items {visible_sum:.2f} + tax {check_tax:.2f} + tip "
+                        f"{check_tip:.2f} = {expected_total:.2f}, but the receipt "
+                        f"says {reported_total:.2f}. "
                         "Check the items and total; SpendSnap will not change either."
                     )
             elif reported_total is not None and reviewed_items:
@@ -507,17 +522,21 @@ with scan_tab:
             elif not reviewed_items:
                 st.error("Add at least one named line item before saving.")
             else:
-                st.session_state.receipts.append(
-                    {
-                        "merchant": merchant.strip(),
-                        "date": transaction_date.strip() or None,
-                        "currency": currency.strip().upper() or None,
-                        "total": reported_total,
-                        "tax": manual_tax,
-                        "tip": manual_tip,
-                        "items": reviewed_items,
-                    }
-                )
-                st.session_state.pending_receipt = None
-                st.success("Saved to this browser session's dashboard.")
-                st.rerun()
+                new_receipt = {
+                    "merchant": merchant.strip(),
+                    "date": transaction_date.strip() or None,
+                    "currency": currency.strip().upper() or None,
+                    "total": reported_total,
+                    "tax": manual_tax,
+                    "tip": manual_tip,
+                    "items": reviewed_items,
+                }
+                try:
+                    save_receipts(st.session_state.receipts + [new_receipt])
+                except OSError:
+                    st.error("Could not save the receipt to disk. Please try again.")
+                else:
+                    st.session_state.receipts.append(new_receipt)
+                    st.session_state.pending_receipt = None
+                    st.success("Saved to your dashboard.")
+                    st.rerun()

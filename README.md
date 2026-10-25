@@ -17,8 +17,8 @@ students a simple view of where their everyday spending goes.
   choose (4.33 weeks per month). The estimate is not presented as actual
   recurring spending or guaranteed savings.
 
-Receipts are held only in Streamlit's current browser session; this MVP has no
-database or account system. The image is sent to Google for AI processing when
+Saved receipts are stored on your computer in `data/receipts.json` (ignored by
+git, so they are never pushed); this MVP has no database or account system. The image is sent to Google for AI processing when
 you choose **Analyze receipt**. Avoid uploading sensitive receipts unless you
 are comfortable sharing them with the configured provider.
 
@@ -76,8 +76,8 @@ commit them.
    categories, and receipt total as needed.
 5. Compare the line-item warning with the printed receipt. The app never
    overwrites the reported total to make the numbers match.
-6. Select **Save transaction** and view the dashboard. The dashboard and CSV
-   are available for the current browser session.
+6. Select **Save transaction** and view the dashboard. Saved receipts stay
+   on the dashboard after refreshing or restarting the app.
 
 If you do not yet have an API key, the dashboard and local tests still work,
 but live receipt analysis requires a valid key and model access.
