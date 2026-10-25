@@ -456,7 +456,7 @@ with scan_tab:
                     "Quantity": item.get("quantity"),
                     "Unit price": item.get("unit_price"),
                     "Line total": item.get("line_total"),
-                    "Category": categorize_item(item["name"]),
+                    "Category": item.get("category") or categorize_item(item["name"]),
                 }
             )
         edited_items = st.data_editor(

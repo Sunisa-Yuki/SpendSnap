@@ -48,6 +48,19 @@ class ReceiptValidationTests(unittest.TestCase):
         self.assertIsNone(result["tax"])
         self.assertEqual(result["items"][0]["name"], "Iced matcha")
 
+    def test_model_category_is_kept_only_when_known(self):
+        result = validate_receipt(
+            {
+                "items": [
+                    {"name": "Bananas", "category": "groceries"},
+                    {"name": "Gift card", "category": "Gifts"},
+                    {"name": "Napkins"},
+                ]
+            }
+        )
+        categories = [item["category"] for item in result["items"]]
+        self.assertEqual(categories, ["Groceries", None, None])
+
     def test_ambiguous_currency_symbol_stays_unknown(self):
         result = validate_receipt({"currency": "$", "items": []})
         self.assertIsNone(result["currency"])
@@ -102,6 +115,8 @@ class ReceiptValidationTests(unittest.TestCase):
         )
         self.assertEqual(result["merchant"], "Cafe")
         client.models.generate_content.assert_called_once()
+        config = client.models.generate_content.call_args.kwargs["config"]
+        self.assertEqual(config.thinking_config.thinking_level, "MINIMAL")
         client.interactions.create.assert_not_called()
 
     @patch("google.genai.Client")
@@ -168,8 +183,15 @@ class ReceiptValidationTests(unittest.TestCase):
 
 class SpendingTests(unittest.TestCase):
     def test_categories_cover_common_student_purchases(self):
-        self.assertEqual(categorize_item("Iced matcha"), "Drinks")
+        self.assertEqual(categorize_item("Iced matcha"), "Coffee & drinks")
         self.assertEqual(categorize_item("Tomatoes"), "Groceries")
+        self.assertEqual(categorize_item("E ROTISSERIE CHKN 287461"), "Groceries")
+        self.assertEqual(
+            categorize_item("E PAPER TOWEL 12PK 583920"), "Household & paper products"
+        )
+        self.assertEqual(
+            categorize_item("Toilet Paper 30 Rolls"), "Household & paper products"
+        )
         self.assertEqual(categorize_item("Mystery item"), "Other")
 
     def test_line_sum_only_uses_complete_known_amounts(self):
