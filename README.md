@@ -5,7 +5,7 @@ students a simple view of where their everyday spending goes.
 
 ## What the MVP does
 
-- Upload and preview JPG, JPEG, or PNG receipts.
+- Upload and preview JPG, JPEG, PNG, or HEIC (iPhone) receipts.
 - Send the image to a configurable Google Gemini API model for multimodal
   extraction of merchant, date, currency, reported total, tax, tip, and items.
 - Validate the returned JSON, review and edit details, and flag mismatches
@@ -70,7 +70,7 @@ commit them.
 ## Try a sample receipt
 
 1. Open the app and select **Scan a receipt**.
-2. Choose a clear JPG, JPEG, or PNG receipt image and inspect the preview.
+2. Choose a clear JPG, JPEG, PNG, or HEIC receipt image and inspect the preview.
 3. Read the privacy note, then select **Analyze receipt**.
 4. Review the extracted fields and line items. Correct names, quantity, prices,
    categories, and receipt total as needed.

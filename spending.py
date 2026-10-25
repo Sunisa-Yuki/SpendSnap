@@ -1,5 +1,6 @@
 """Small, editable rules for categorizing receipt line items."""
 
+import re
 from typing import Any
 
 
@@ -68,14 +69,37 @@ RULES = {
         "dining",
         "food",
         "cafe",
+        "chicken",
+        "chkn",
+        "beef",
+        "steak",
+        "pork",
+        "fish",
+        "shrimp",
+        "rice",
+        "noodle",
+        "ramen",
+        "pasta",
+        "sushi",
+        "curry",
+        "bowl",
+        "wrap",
+        "burrito",
+        "fries",
+        "wing",
+        "dumpling",
+        "soup",
+        "combo",
+        "entree",
     ),
 }
 
 
 def categorize_item(name: str) -> str:
+    """Fallback when the AI gives no category; keywords match at word starts only."""
     normalized = name.casefold()
     for category, keywords in RULES.items():
-        if any(keyword in normalized for keyword in keywords):
+        if any(re.search(rf"\b{re.escape(keyword)}", normalized) for keyword in keywords):
             return category
     return "Other"
 

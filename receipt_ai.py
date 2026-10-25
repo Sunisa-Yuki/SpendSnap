@@ -10,6 +10,15 @@ from io import BytesIO
 from typing import Any
 
 from PIL import Image, ImageOps
+from pillow_heif import register_heif_opener
+
+from spending import CATEGORIES
+
+# iPhone photos are HEIC; this teaches Pillow to open them.
+register_heif_opener()
+
+# Pillow reports iPhone JPEGs (which embed depth/HDR data) as "MPO".
+SUPPORTED_FORMATS = {"JPEG", "MPO", "PNG", "HEIF"}
 
 
 class ReceiptAIError(Exception):
@@ -38,15 +47,15 @@ def prepare_receipt_image(image_bytes: bytes) -> tuple[bytes, str]:
     """Orient and downscale large receipt photos before sending them to Google."""
     try:
         with Image.open(BytesIO(image_bytes)) as source:
-            if source.format not in {"JPEG", "PNG"}:
-                raise ReceiptAIError("Please upload a JPG, JPEG, or PNG receipt image.")
+            if source.format not in SUPPORTED_FORMATS:
+                raise ReceiptAIError("Please upload a JPG, PNG, or HEIC receipt image.")
             image = ImageOps.exif_transpose(source).convert("RGB")
             image.thumbnail((2200, 2200), Image.Resampling.LANCZOS)
             output = BytesIO()
             image.save(output, format="JPEG", quality=88, optimize=True)
     except (OSError, ValueError) as exc:
         raise ReceiptAIError(
-            "The uploaded image could not be prepared. Please try another JPG or PNG."
+            "The uploaded image could not be prepared. Please try another JPG, PNG, or HEIC."
         ) from exc
     return output.getvalue(), "image/jpeg"
 
@@ -139,12 +148,14 @@ def validate_receipt(payload: Any) -> dict[str, Any]:
         quantity = _number(raw_item.get("quantity"), "quantity")
         if quantity is not None and quantity <= 0:
             raise ReceiptAIError("A line item had an invalid quantity.")
+        category = raw_item.get("category")
         items.append(
             {
                 "name": name.strip(),
                 "quantity": quantity,
                 "unit_price": _number(raw_item.get("unit_price"), "unit price"),
                 "line_total": _number(raw_item.get("line_total"), "line total"),
+                "category": category if category in CATEGORIES else None,
             }
         )
 
@@ -170,9 +181,10 @@ def extract_receipt(
     if mime_type not in {"image/jpeg", "image/png"}:
         raise ReceiptAIError("Please upload a JPG, JPEG, or PNG receipt image.")
 
-    prompt = """
+    category_options = ", ".join(f'"{c}"' for c in CATEGORIES)
+    prompt = f"""
 Read this receipt image and return only one JSON object with this shape:
-{
+{{
   "merchant": "string or null",
   "date": "YYYY-MM-DD or null",
   "currency": "ISO 4217 code or null",
@@ -180,16 +192,21 @@ Read this receipt image and return only one JSON object with this shape:
   "tax": number or null,
   "tip": number or null,
   "items": [
-    {
+    {{
       "name": "string",
       "quantity": number or null,
       "unit_price": number or null,
-      "line_total": number or null
-    }
+      "line_total": number or null,
+      "category": one of {category_options}
+    }}
   ]
-}
+}}
 Use null when a value is not shown or cannot be read. Do not guess, calculate,
 or substitute missing values. Include only line items visible on the receipt.
+For each item's category, use the item and the merchant together: prepared
+food from a restaurant, cafe, or food court is "Food & restaurants"; drinks
+are "Drinks"; uncooked food from a store is "Groceries". Use "Other" only
+when nothing else fits.
 If the image is not a receipt or is unreadable, return an empty items list and
 null for fields you cannot identify. Do not include markdown fences.
 """.strip()

@@ -1,7 +1,6 @@
 import os
 import uuid
 from datetime import date
-from io import BytesIO
 from math import isfinite
 from typing import Any
 
@@ -9,7 +8,6 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
-from PIL import Image, UnidentifiedImageError
 
 from receipt_ai import ReceiptAIError, extract_receipt, prepare_receipt_image
 from spending import (
@@ -341,20 +339,17 @@ with scan_tab:
     st.write("")
     uploaded_file = st.file_uploader(
         "Choose a receipt image",
-        type=["jpg", "jpeg", "png"],
-        help="JPG, JPEG, and PNG images are supported.",
+        type=["jpg", "jpeg", "png", "heic", "heif"],
+        help="JPG, JPEG, PNG, and HEIC (iPhone) images are supported.",
     )
 
     if uploaded_file:
         image_bytes = uploaded_file.getvalue()
         try:
-            with Image.open(BytesIO(image_bytes)) as image:
-                image_format = image.format
-                image.verify()
-            if image_format not in {"JPEG", "PNG"}:
-                raise UnidentifiedImageError("Unsupported image format")
-            st.image(image_bytes, caption="Receipt preview", width="stretch")
-        except (UnidentifiedImageError, OSError):
+            # Browsers can't display HEIC, so preview the converted JPEG.
+            preview_bytes, _ = prepare_receipt_image(image_bytes)
+            st.image(preview_bytes, caption="Receipt preview", width="stretch")
+        except ReceiptAIError:
             st.error("That file could not be opened as an image. Please try another one.")
             image_bytes = b""
 
@@ -456,7 +451,7 @@ with scan_tab:
                     "Quantity": item.get("quantity"),
                     "Unit price": item.get("unit_price"),
                     "Line total": item.get("line_total"),
-                    "Category": categorize_item(item["name"]),
+                    "Category": item.get("category") or categorize_item(item["name"]),
                 }
             )
         edited_items = st.data_editor(

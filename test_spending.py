@@ -171,6 +171,23 @@ class SpendingTests(unittest.TestCase):
         self.assertEqual(categorize_item("Iced matcha"), "Drinks")
         self.assertEqual(categorize_item("Tomatoes"), "Groceries")
         self.assertEqual(categorize_item("Mystery item"), "Other")
+        self.assertEqual(categorize_item("CHKN TERIYAKI BOWL"), "Food & restaurants")
+
+    def test_categories_ignore_keywords_inside_other_words(self):
+        self.assertEqual(categorize_item("Ribeye steak"), "Food & restaurants")
+        self.assertEqual(categorize_item("Thai tea"), "Drinks")
+
+    def test_ai_category_is_kept_only_when_valid(self):
+        result = validate_receipt(
+            {
+                "items": [
+                    {"name": "Pad thai", "category": "Food & restaurants"},
+                    {"name": "Thing", "category": "Snacks"},
+                ]
+            }
+        )
+        self.assertEqual(result["items"][0]["category"], "Food & restaurants")
+        self.assertIsNone(result["items"][1]["category"])
 
     def test_line_sum_only_uses_complete_known_amounts(self):
         self.assertEqual(amount_for_item({"unit_price": 3, "quantity": 2}), 6)
