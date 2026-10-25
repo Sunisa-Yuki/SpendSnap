@@ -13,10 +13,16 @@ from receipt_ai import ReceiptAIError, extract_receipt, prepare_receipt_image
 from storage import StorageError, load_receipts, save_receipts
 from spending import (
     CATEGORIES,
+    PERIODS,
     amount_for_item,
     categorize_item,
     line_item_sum,
+    receipt_date,
+    receipts_in_period,
 )
+
+# One color per category, in CATEGORIES order (checked for color-blind contrast).
+CATEGORY_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]
 
 
 def amount_for_saved_item(item: dict[str, Any]) -> float | None:
@@ -159,7 +165,17 @@ st.markdown(
 dashboard_tab, scan_tab = st.tabs(["Your spending", "Scan a receipt"])
 
 with dashboard_tab:
-    receipts = st.session_state.receipts
+    all_receipts = st.session_state.receipts
+    period = (
+        st.segmented_control("Show", PERIODS, default="All time", key="dashboard_period")
+        or "All time"
+    )
+    receipts = receipts_in_period(all_receipts, period, date.today())
+    undated_count = sum(1 for receipt in all_receipts if receipt_date(receipt) is None)
+    if period != "All time" and undated_count:
+        st.caption(
+            f"{undated_count} receipt(s) without a readable date only appear in All time."
+        )
     known_receipts = [
         receipt
         for receipt in receipts
@@ -198,7 +214,9 @@ with dashboard_tab:
             )
         )
 
-    if not receipts:
+    if all_receipts and not receipts:
+        st.info(f"No receipts dated {period.lower()} yet.")
+    elif not receipts:
         st.info(
             "Your dashboard is ready. Scan a receipt to see your spending "
             "totals, categories, and a student-friendly estimate."
@@ -206,17 +224,17 @@ with dashboard_tab:
     else:
         category_rows = []
         item_rows = []
-        for receipt in receipts:
+        for receipt_index, receipt in enumerate(receipts):
             for item in receipt["items"]:
                 amount = amount_for_saved_item(item)
-                if amount is not None:
-                    category_rows.append(
-                        {
-                            "Category": item["category"],
-                            "Amount": amount,
-                            "Currency": receipt.get("currency") or "Unknown currency",
-                        }
-                    )
+                category_rows.append(
+                    {
+                        "Category": item["category"],
+                        "Amount": amount,
+                        "Currency": receipt.get("currency") or "Unknown currency",
+                        "Receipt": receipt_index,
+                    }
+                )
                 item_rows.append(
                     {
                         "Date": receipt.get("date") or "Not shown",
@@ -235,26 +253,37 @@ with dashboard_tab:
                 )
 
         st.subheader("Where it goes")
-        if category_rows:
-            category_frame = pd.DataFrame(category_rows)
-            chart_data = (
-                category_frame.groupby(["Category", "Currency"], as_index=False)[
-                    "Amount"
-                ]
-                .sum()
-                .sort_values("Amount", ascending=False)
-            )
-            chart = alt.Chart(chart_data).mark_bar(
-                cornerRadiusEnd=6, color="#3a8766"
+        category_frame = pd.DataFrame(category_rows)
+        summary = category_frame.groupby(["Category", "Currency"], as_index=False).agg(
+            Purchases=("Category", "size"),
+            Receipts=("Receipt", "nunique"),
+            # Blank (not 0.00) when no item in the category has a known price.
+            Spent=("Amount", lambda amounts: amounts.sum(min_count=1)),
+        )
+        summary["Share"] = summary["Spent"] / summary.groupby("Currency")[
+            "Spent"
+        ].transform("sum")
+        summary = summary.sort_values("Spent", ascending=False)
+        if summary["Spent"].sum() > 0:
+            chart_data = summary[summary["Spent"] > 0]
+            chart = alt.Chart(chart_data).mark_arc(
+                innerRadius=70, stroke="#f7f8f5", strokeWidth=2
             ).encode(
-                x=alt.X("Amount:Q", title="Known line-item spend"),
-                y=alt.Y("Category:N", sort="-x", title=None),
+                theta=alt.Theta("Spent:Q", stack=True),
+                color=alt.Color(
+                    "Category:N",
+                    # Fixed colors per category, so filtering never repaints them.
+                    scale=alt.Scale(domain=list(CATEGORIES), range=CATEGORY_COLORS),
+                    legend=alt.Legend(title=None),
+                ),
+                order=alt.Order("Spent:Q", sort="descending"),
                 tooltip=[
                     "Category",
                     "Currency",
-                    alt.Tooltip("Amount:Q", format=".2f"),
+                    alt.Tooltip("Spent:Q", format=".2f"),
+                    alt.Tooltip("Share:Q", format=".0%"),
                 ],
-            ).properties(height=260)
+            ).properties(height=280)
             if chart_data["Currency"].nunique() > 1:
                 chart = chart.facet(
                     column=alt.Column("Currency:N", title=None),
@@ -266,6 +295,21 @@ with dashboard_tab:
                 "No line-item prices are available yet. Edit item prices while "
                 "reviewing a receipt to include them in category totals."
             )
+        st.dataframe(
+            summary if summary["Currency"].nunique() > 1 else summary.drop(columns="Currency"),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Purchases": st.column_config.NumberColumn(
+                    "Purchases", help="Line items in this category"
+                ),
+                "Receipts": st.column_config.NumberColumn(
+                    "Receipts", help="Separate receipts (trips) with this category"
+                ),
+                "Spent": st.column_config.NumberColumn("Spent", format="%.2f"),
+                "Share": st.column_config.NumberColumn("Share", format="percent"),
+            },
+        )
 
         st.subheader("Receipt details")
         details = pd.DataFrame(

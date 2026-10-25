@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -12,7 +13,12 @@ from receipt_ai import (
     prepare_receipt_image,
     validate_receipt,
 )
-from spending import amount_for_item, categorize_item, line_item_sum
+from spending import (
+    amount_for_item,
+    categorize_item,
+    line_item_sum,
+    receipts_in_period,
+)
 from storage import StorageError, load_receipts, save_receipts
 
 
@@ -204,6 +210,24 @@ class SpendingTests(unittest.TestCase):
             8.5,
         )
         self.assertIsNone(line_item_sum([{"name": "Unknown price"}]))
+
+    def test_period_filter_uses_calendar_week_and_month(self):
+        receipts = [
+            {"date": "2026-10-19"},  # Monday of the current week
+            {"date": "2026-10-18"},  # Sunday before: this month, last week
+            {"date": "2026-09-30"},
+            {"date": None},
+        ]
+        today = date(2026, 10, 25)  # a Sunday
+        self.assertEqual(len(receipts_in_period(receipts, "All time", today)), 4)
+        self.assertEqual(
+            [r["date"] for r in receipts_in_period(receipts, "This month", today)],
+            ["2026-10-19", "2026-10-18"],
+        )
+        self.assertEqual(
+            [r["date"] for r in receipts_in_period(receipts, "This week", today)],
+            ["2026-10-19"],
+        )
 
 
 class StorageTests(unittest.TestCase):

@@ -1,6 +1,7 @@
 """Small, editable rules for categorizing receipt line items."""
 
 import re
+from datetime import date, timedelta
 from typing import Any
 
 
@@ -114,6 +115,35 @@ def amount_for_item(item: dict[str, Any]) -> float | None:
     if unit_price is not None and quantity is not None:
         return float(unit_price) * float(quantity)
     return None
+
+
+PERIODS = ("All time", "This month", "This week")
+
+
+def receipt_date(receipt: dict[str, Any]) -> date | None:
+    try:
+        return date.fromisoformat(receipt.get("date") or "")
+    except ValueError:
+        return None
+
+
+def receipts_in_period(
+    receipts: list[dict[str, Any]], period: str, today: date
+) -> list[dict[str, Any]]:
+    """Keep receipts dated in this calendar month or this Monday-to-Sunday week."""
+    if period == "This month":
+        start = today.replace(day=1)
+        end = (start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+    elif period == "This week":
+        start = today - timedelta(days=today.weekday())
+        end = start + timedelta(days=6)
+    else:
+        return list(receipts)
+    return [
+        receipt
+        for receipt in receipts
+        if (day := receipt_date(receipt)) is not None and start <= day <= end
+    ]
 
 
 def line_item_sum(items: list[dict[str, Any]]) -> float | None:
