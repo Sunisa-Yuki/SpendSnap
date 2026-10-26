@@ -10,8 +10,15 @@ from io import BytesIO
 from typing import Any
 
 from PIL import Image, ImageOps
+from pillow_heif import register_heif_opener
 
 from spending import CATEGORIES, CATEGORY_DESCRIPTIONS
+
+# iPhone photos are HEIC; this teaches Pillow to open them.
+register_heif_opener()
+
+# Pillow reports iPhone JPEGs (which embed depth/HDR data) as "MPO".
+SUPPORTED_FORMATS = {"JPEG", "MPO", "PNG", "HEIF"}
 
 
 class ReceiptAIError(Exception):
@@ -40,15 +47,15 @@ def prepare_receipt_image(image_bytes: bytes) -> tuple[bytes, str]:
     """Orient and downscale large receipt photos before sending them to Google."""
     try:
         with Image.open(BytesIO(image_bytes)) as source:
-            if source.format not in {"JPEG", "PNG"}:
-                raise ReceiptAIError("Please upload a JPG, JPEG, or PNG receipt image.")
+            if source.format not in SUPPORTED_FORMATS:
+                raise ReceiptAIError("Please upload a JPG, PNG, or HEIC receipt image.")
             image = ImageOps.exif_transpose(source).convert("RGB")
             image.thumbnail((2200, 2200), Image.Resampling.LANCZOS)
             output = BytesIO()
             image.save(output, format="JPEG", quality=88, optimize=True)
     except (OSError, ValueError) as exc:
         raise ReceiptAIError(
-            "The uploaded image could not be prepared. Please try another JPG or PNG."
+            "The uploaded image could not be prepared. Please try another JPG, PNG, or HEIC."
         ) from exc
     return output.getvalue(), "image/jpeg"
 
