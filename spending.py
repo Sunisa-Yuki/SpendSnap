@@ -231,3 +231,59 @@ def line_item_sum(items: list[dict[str, Any]]) -> float | None:
     if any(amount is None for amount in amounts):
         return None
     return sum(amount for amount in amounts if amount is not None)
+
+
+# Monthly estimates are hypothetical: an item price times a weekly frequency
+# the student picks, over an average month of 52 / 12 weeks.
+WEEKS_PER_MONTH = 4.33
+
+# Purchases at or under this amount count as "small" for the what-if picker.
+SMALL_PURCHASE_LIMIT = 15.0
+
+# A practical swap for each category. Categories not listed use the default.
+SAVING_SWAPS = {
+    "Coffee & drinks": "make it at home or bring a refillable bottle",
+    "Dining out": "pack a lunch or cook a batch to eat over a few days",
+    "Groceries": "pick the store brand or a larger pack",
+    "Transportation": "walk, bike, or take transit for short trips",
+    "Entertainment": "look for student discounts or free campus events",
+    "Clothing & accessories": "wait a week before buying to see if you still want it",
+    "Electronics": "wait a week before buying to see if you still want it",
+}
+DEFAULT_SAVING_SWAP = "skip it unless you planned for it"
+
+
+def is_small_purchase(amount: float) -> bool:
+    return 0 < amount <= SMALL_PURCHASE_LIMIT
+
+
+def monthly_estimate(amount: float, times_per_week: float) -> float:
+    """Hypothetical monthly cost if this purchase repeated at this weekly rate."""
+    return amount * times_per_week * WEEKS_PER_MONTH
+
+
+def saving_suggestion(
+    category: str, amount: float, times_per_week: int
+) -> dict[str, Any]:
+    """Suggest cutting the habit roughly in half, with a category-specific swap.
+
+    Once a week becomes every other week. The saving is hypothetical and does
+    not subtract what the swap itself costs (e.g. coffee beans at home).
+    """
+    new_per_week = 0.5 if times_per_week <= 1 else times_per_week - times_per_week // 2
+    fewer_per_week = times_per_week - new_per_week
+    swap = SAVING_SWAPS.get(category, DEFAULT_SAVING_SWAP)
+    if times_per_week <= 1:
+        tip = f"Buy it every other week instead of weekly. On the off weeks, {swap}."
+    else:
+        times = "time" if fewer_per_week == 1 else "times"
+        tip = (
+            f"Cut back from {times_per_week} to {new_per_week:g} a week. "
+            f"The other {fewer_per_week:g} {times}, {swap}."
+        )
+    return {
+        "tip": tip,
+        "new_per_week": new_per_week,
+        "fewer_per_week": fewer_per_week,
+        "monthly_saving": monthly_estimate(amount, fewer_per_week),
+    }

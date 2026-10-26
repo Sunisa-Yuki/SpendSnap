@@ -17,8 +17,11 @@ from spending import (
     amount_for_item,
     categorize_item,
     current_category,
+    is_small_purchase,
     line_item_sum,
+    monthly_estimate,
     receipts_in_period,
+    saving_suggestion,
 )
 from storage import StorageError, load_receipts, save_receipts
 
@@ -257,6 +260,27 @@ class SpendingTests(unittest.TestCase):
             [r["date"] for r in receipts_in_period(receipts, "This week", today)],
             ["2026-10-19"],
         )
+
+
+    def test_monthly_estimate_uses_weekly_rate(self):
+        self.assertAlmostEqual(monthly_estimate(5.50, 5), 119.075)
+        self.assertTrue(is_small_purchase(15))
+        self.assertFalse(is_small_purchase(15.01))
+        self.assertFalse(is_small_purchase(0))
+
+    def test_saving_suggestion_halves_the_habit(self):
+        coffee = saving_suggestion("Coffee & drinks", 5.50, 5)
+        self.assertEqual(coffee["new_per_week"], 3)
+        self.assertEqual(coffee["fewer_per_week"], 2)
+        self.assertAlmostEqual(coffee["monthly_saving"], 47.63)
+        self.assertIn("make it at home", coffee["tip"])
+
+        weekly = saving_suggestion("Mystery", 10, 1)
+        self.assertEqual(weekly["new_per_week"], 0.5)
+        self.assertAlmostEqual(weekly["monthly_saving"], 21.65)
+        self.assertIn("every other week", weekly["tip"])
+
+        self.assertIn("The other 1 time,", saving_suggestion("Dining out", 12, 2)["tip"])
 
 
 class StorageTests(unittest.TestCase):
