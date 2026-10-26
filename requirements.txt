@@ -4,3 +4,4 @@ pandas
 altair
 python-dotenv
 pillow
+pillow-heif

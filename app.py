@@ -1,7 +1,6 @@
 import os
 import uuid
 from datetime import date
-from io import BytesIO
 from math import isfinite
 from typing import Any
 
@@ -9,15 +8,38 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
-from PIL import Image, UnidentifiedImageError
 
 from receipt_ai import ReceiptAIError, extract_receipt, prepare_receipt_image
+from storage import StorageError, load_receipts, save_receipts
 from spending import (
     CATEGORIES,
+    PERIODS,
+    SMALL_PURCHASE_LIMIT,
+    WEEKS_PER_MONTH,
     amount_for_item,
     categorize_item,
+    current_category,
+    is_small_purchase,
     line_item_sum,
+    monthly_estimate,
+    receipt_date,
+    receipts_in_period,
+    saving_suggestion,
 )
+
+# A chart can only use 8 colors that stay distinct for color-blind readers, so
+# the donut shows the 7 most common student categories and folds the rest into
+# "Everything else". The table below the chart still lists every category.
+CHART_COLORS = {
+    "Groceries": "#2a78d6",
+    "Dining out": "#eb6834",
+    "Coffee & drinks": "#1baf7a",
+    "Household & paper products": "#eda100",
+    "Personal care & health": "#e87ba4",
+    "School & office supplies": "#008300",
+    "Transportation": "#e34948",
+    "Everything else": "#6250d6",
+}
 
 
 def amount_for_saved_item(item: dict[str, Any]) -> float | None:
@@ -67,12 +89,17 @@ def edited_items_to_records(frame: pd.DataFrame) -> list[dict[str, Any]]:
         category = row.get("Category")
         if category not in CATEGORIES:
             category = categorize_item(name)
+        quantity = optional_float("Quantity")
+        unit_price = optional_float("Unit price")
+        line_total = optional_float("Line total")
+        if unit_price is None and quantity is not None and quantity > 0 and line_total is not None:
+            unit_price = round(line_total / quantity, 2)
         records.append(
             {
                 "name": name,
-                "quantity": optional_float("Quantity"),
-                "unit_price": optional_float("Unit price"),
-                "line_total": optional_float("Line total"),
+                "quantity": quantity,
+                "unit_price": unit_price,
+                "line_total": line_total,
                 "category": category,
             }
         )
@@ -137,7 +164,17 @@ st.markdown(
 )
 
 if "receipts" not in st.session_state:
-    st.session_state.receipts = []
+    try:
+        st.session_state.receipts = load_receipts()
+        for saved_receipt in st.session_state.receipts:
+            for saved_item in saved_receipt["items"]:
+                saved_item["category"] = current_category(
+                    saved_item.get("category"), saved_item["name"]
+                )
+    except StorageError as exc:
+        # Stop instead of starting empty, so the next save can't overwrite the file.
+        st.error(f"{exc} Fix or move that file, then refresh the page.")
+        st.stop()
 if "pending_receipt" not in st.session_state:
     st.session_state.pending_receipt = None
 
@@ -150,7 +187,17 @@ st.markdown(
 dashboard_tab, scan_tab = st.tabs(["Your spending", "Scan a receipt"])
 
 with dashboard_tab:
-    receipts = st.session_state.receipts
+    all_receipts = st.session_state.receipts
+    period = (
+        st.segmented_control("Show", PERIODS, default="All time", key="dashboard_period")
+        or "All time"
+    )
+    receipts = receipts_in_period(all_receipts, period, date.today())
+    undated_count = sum(1 for receipt in all_receipts if receipt_date(receipt) is None)
+    if period != "All time" and undated_count:
+        st.caption(
+            f"{undated_count} receipt(s) without a readable date only appear in All time."
+        )
     known_receipts = [
         receipt
         for receipt in receipts
@@ -189,7 +236,9 @@ with dashboard_tab:
             )
         )
 
-    if not receipts:
+    if all_receipts and not receipts:
+        st.info(f"No receipts dated {period.lower()} yet.")
+    elif not receipts:
         st.info(
             "Your dashboard is ready. Scan a receipt to see your spending "
             "totals, categories, and a student-friendly estimate."
@@ -197,17 +246,17 @@ with dashboard_tab:
     else:
         category_rows = []
         item_rows = []
-        for receipt in receipts:
+        for receipt_index, receipt in enumerate(receipts):
             for item in receipt["items"]:
                 amount = amount_for_saved_item(item)
-                if amount is not None:
-                    category_rows.append(
-                        {
-                            "Category": item["category"],
-                            "Amount": amount,
-                            "Currency": receipt.get("currency") or "Unknown currency",
-                        }
-                    )
+                category_rows.append(
+                    {
+                        "Category": item["category"],
+                        "Amount": amount,
+                        "Currency": receipt.get("currency") or "Unknown currency",
+                        "Receipt": receipt_index,
+                    }
+                )
                 item_rows.append(
                     {
                         "Date": receipt.get("date") or "Not shown",
@@ -226,26 +275,48 @@ with dashboard_tab:
                 )
 
         st.subheader("Where it goes")
-        if category_rows:
-            category_frame = pd.DataFrame(category_rows)
+        category_frame = pd.DataFrame(category_rows)
+        summary = category_frame.groupby(["Category", "Currency"], as_index=False).agg(
+            Purchases=("Category", "size"),
+            Receipts=("Receipt", "nunique"),
+            # Blank (not 0.00) when no item in the category has a known price.
+            Spent=("Amount", lambda amounts: amounts.sum(min_count=1)),
+        )
+        summary["Share"] = summary["Spent"] / summary.groupby("Currency")[
+            "Spent"
+        ].transform("sum")
+        summary = summary.sort_values("Spent", ascending=False)
+        if summary["Spent"].sum() > 0:
             chart_data = (
-                category_frame.groupby(["Category", "Currency"], as_index=False)[
-                    "Amount"
-                ]
+                summary[summary["Spent"] > 0]
+                .assign(
+                    Slice=lambda frame: frame["Category"].where(
+                        frame["Category"].isin(CHART_COLORS), "Everything else"
+                    )
+                )
+                .groupby(["Slice", "Currency"], as_index=False)[["Spent", "Share"]]
                 .sum()
-                .sort_values("Amount", ascending=False)
             )
-            chart = alt.Chart(chart_data).mark_bar(
-                cornerRadiusEnd=6, color="#3a8766"
+            chart = alt.Chart(chart_data).mark_arc(
+                innerRadius=70, stroke="#f7f8f5", strokeWidth=2
             ).encode(
-                x=alt.X("Amount:Q", title="Known line-item spend"),
-                y=alt.Y("Category:N", sort="-x", title=None),
+                theta=alt.Theta("Spent:Q", stack=True),
+                color=alt.Color(
+                    "Slice:N",
+                    # Fixed colors per category, so filtering never repaints them.
+                    scale=alt.Scale(
+                        domain=list(CHART_COLORS), range=list(CHART_COLORS.values())
+                    ),
+                    legend=alt.Legend(title=None),
+                ),
+                order=alt.Order("Spent:Q", sort="descending"),
                 tooltip=[
-                    "Category",
+                    alt.Tooltip("Slice:N", title="Category"),
                     "Currency",
-                    alt.Tooltip("Amount:Q", format=".2f"),
+                    alt.Tooltip("Spent:Q", format=".2f"),
+                    alt.Tooltip("Share:Q", format=".0%"),
                 ],
-            ).properties(height=260)
+            ).properties(height=280)
             if chart_data["Currency"].nunique() > 1:
                 chart = chart.facet(
                     column=alt.Column("Currency:N", title=None),
@@ -257,6 +328,21 @@ with dashboard_tab:
                 "No line-item prices are available yet. Edit item prices while "
                 "reviewing a receipt to include them in category totals."
             )
+        st.dataframe(
+            summary if summary["Currency"].nunique() > 1 else summary.drop(columns="Currency"),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Purchases": st.column_config.NumberColumn(
+                    "Purchases", help="Line items in this category"
+                ),
+                "Receipts": st.column_config.NumberColumn(
+                    "Receipts", help="Separate receipts (trips) with this category"
+                ),
+                "Spent": st.column_config.NumberColumn("Spent", format="%.2f"),
+                "Share": st.column_config.NumberColumn("Share", format="percent"),
+            },
+        )
 
         st.subheader("Receipt details")
         details = pd.DataFrame(
@@ -307,19 +393,31 @@ with dashboard_tab:
                 mime="text/csv",
             )
 
-        st.subheader("A small-spend what-if")
+        st.subheader("Monthly estimates and saving insights")
         all_items = [
             (receipt, item)
             for receipt in receipts
             for item in receipt["items"]
             if amount_for_saved_item(item) is not None
         ]
+        small_items = [
+            (receipt, item)
+            for receipt, item in all_items
+            if is_small_purchase(amount_for_saved_item(item))
+        ]
         if all_items:
+            only_small = st.toggle(
+                f"Only small purchases ({SMALL_PURCHASE_LIMIT:g} or less)",
+                value=bool(small_items),
+                disabled=not small_items,
+                help="Small, frequent buys like coffee or snacks add up fastest.",
+            )
+            picker_items = small_items if only_small else all_items
             choices = [
                 f"{receipt.get('merchant') or 'Receipt'} — {item['name']} "
                 f"({receipt.get('currency') or ''} "
                 f"{amount_for_saved_item(item):.2f})"
-                for receipt, item in all_items
+                for receipt, item in picker_items
             ]
             selected_index = st.selectbox(
                 "Pick a purchase to estimate",
@@ -333,19 +431,33 @@ with dashboard_tab:
                 value=5,
                 step=1,
             )
-            selected_receipt, selected_item = all_items[selected_index]
-            monthly_estimate = (
-                amount_for_saved_item(selected_item) * repeats_per_week * 4.33
-            )
+            selected_receipt, selected_item = picker_items[selected_index]
+            selected_amount = amount_for_saved_item(selected_item)
             selected_currency = selected_receipt.get("currency") or ""
-            st.success(
-                f"That would be about {selected_currency} {monthly_estimate:,.2f} "
-                "per month."
+            estimate = monthly_estimate(selected_amount, repeats_per_week)
+            suggestion = saving_suggestion(
+                selected_item["category"], selected_amount, repeats_per_week
             )
+
+            estimate_col, saving_col = st.columns(2)
+            estimate_col.metric(
+                "Hypothetical monthly cost",
+                f"{selected_currency} {estimate:,.2f}",
+                help="Estimate, not your actual spending.",
+            )
+            saving_col.metric(
+                "Hypothetical monthly saving",
+                f"{selected_currency} {suggestion['monthly_saving']:,.2f}",
+                help="Estimate, not a guaranteed saving.",
+            )
+            st.info(f"**Saving idea:** {suggestion['tip']}")
             st.caption(
-                "Hypothetical estimate only: it assumes the selected receipt's "
-                "line-item amount and your chosen weekly frequency for 4.33 weeks. "
-                "It is not a claim about your purchase history or guaranteed savings."
+                f"Hypothetical estimates only: {selected_currency} "
+                f"{selected_amount:.2f} × {repeats_per_week} a week × "
+                f"{WEEKS_PER_MONTH} weeks a month. The saving assumes "
+                f"{suggestion['fewer_per_week']:g} fewer purchase(s) a week and "
+                "doesn't subtract what the swap costs. Neither number is your "
+                "real purchase history or a guaranteed saving."
             )
         else:
             st.caption(
@@ -365,16 +477,27 @@ with scan_tab:
     st.write("")
     uploaded_file = st.file_uploader(
         "Choose a receipt image",
-        type=["jpg", "jpeg", "png"],
-        help="JPG, JPEG, and PNG images are supported.",
+        type=["jpg", "jpeg", "png", "heic", "heif"],
+        help="JPG, JPEG, PNG, and HEIC (iPhone) images are supported.",
     )
 
     # Once a receipt is chosen, show its preview in a narrow left column and
     # the review form beside it.
     if uploaded_file:
-        preview_col, review_col = st.columns([1, 2.5], gap="large")
-    else:
-        preview_col = review_col = st.container()
+        image_bytes = uploaded_file.getvalue()
+        try:
+            # Browsers can't display HEIC, so preview the converted JPEG.
+            preview_bytes, _ = prepare_receipt_image(image_bytes)
+            st.image(preview_bytes, caption="Receipt preview", width="stretch")
+        except ReceiptAIError:
+            st.error("That file could not be opened as an image. Please try another one.")
+            image_bytes = b""
+
+        if image_bytes:
+            st.caption(
+                f"Selected image: {len(image_bytes) / (1024 * 1024):.1f} MB. "
+                "Large photos can take longer to upload and analyze."
+            )
 
     if uploaded_file:
         with preview_col:
@@ -448,127 +571,78 @@ with scan_tab:
                 "AI extraction can make mistakes. Check the receipt and correct "
                 "anything that looks off. Blank fields mean the value was not identified."
             )
-            if not pending.get("merchant"):
-                st.warning(
-                    "SpendSnap couldn't tell which store this receipt is from. "
-                    "Enter the store name below to save it."
-                )
-            info_col1, info_col2 = st.columns(2)
-            with info_col1:
-                merchant = st.text_input(
-                    "Merchant",
-                    value=pending.get("merchant") or "",
-                    key=f"merchant-{st.session_state.pending_id}",
-                    placeholder="Store name, e.g. HeyTea",
-                )
-                transaction_date = st.text_input(
-                    "Date (YYYY-MM-DD, if known)",
-                    value=pending.get("date") or "",
-                    key=f"date-{st.session_state.pending_id}",
-                )
-                currency = st.text_input(
-                    "Currency code (if known)",
-                    value=pending.get("currency") or "",
-                    key=f"currency-{st.session_state.pending_id}",
-                )
-            with info_col2:
-                total_text = st.text_input(
-                    "Reported receipt total (leave blank if not shown)",
-                    value=display_number(pending.get("total")),
-                    key=f"total-{st.session_state.pending_id}",
-                )
-                tax_text = st.text_input(
-                    "Tax (if shown)",
-                    value=display_number(pending.get("tax")),
-                    key=f"tax-{st.session_state.pending_id}",
-                )
-                tip_text = st.text_input(
-                    "Tip (if shown)",
-                    value=display_number(pending.get("tip")),
-                    key=f"tip-{st.session_state.pending_id}",
-                )
-
-            initial_items = []
-            for item in pending["items"]:
-                initial_items.append(
-                    {
-                        "Item": item["name"],
-                        "Quantity": item.get("quantity"),
-                        "Unit price": item.get("unit_price"),
-                        "Line total": item.get("line_total"),
-                        "Category": item.get("category") or categorize_item(item["name"]),
-                    }
-                )
-            edited_items = st.data_editor(
-                pd.DataFrame(
-                    initial_items,
-                    columns=["Item", "Quantity", "Unit price", "Line total", "Category"],
+        edited_items = st.data_editor(
+            pd.DataFrame(
+                initial_items,
+                columns=["Item", "Quantity", "Unit price", "Line total", "Category"],
+            ),
+            key=f"items-{st.session_state.pending_id}",
+            num_rows="dynamic",
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Item": st.column_config.TextColumn("Item"),
+                "Quantity": st.column_config.NumberColumn("Quantity", min_value=0.01),
+                "Unit price": st.column_config.NumberColumn("Unit price", min_value=0.0),
+                "Line total": st.column_config.NumberColumn("Line total", min_value=0.0),
+                "Category": st.column_config.SelectboxColumn(
+                    "Category", options=CATEGORIES, required=True
                 ),
-                key=f"items-{st.session_state.pending_id}",
-                num_rows="dynamic",
-                width="stretch",
-                hide_index=True,
-                column_config={
-                    "Item": st.column_config.TextColumn("Item"),
-                    "Quantity": st.column_config.NumberColumn("Quantity", min_value=0.01),
-                    "Unit price": st.column_config.NumberColumn("Unit price", min_value=0.0),
-                    "Line total": st.column_config.NumberColumn("Line total", min_value=0.0),
-                    "Category": st.column_config.SelectboxColumn(
-                        "Category", options=CATEGORIES, required=True
-                    ),
-                },
-            )
+            },
+        )
 
-            reviewed_items = edited_items_to_records(edited_items)
-            reported_total = parse_manual_number(total_text)
-            if total_text.strip() and reported_total is None:
-                st.warning("The receipt total must be a number, or left blank if unknown.")
+        reviewed_items = edited_items_to_records(edited_items)
+        reported_total = parse_manual_number(total_text)
+        if total_text.strip() and reported_total is None:
+            st.warning("The receipt total must be a number, or left blank if unknown.")
+        else:
+            visible_sum = line_item_sum(reviewed_items)
+            if reported_total is not None and visible_sum is not None:
+                check_tax = parse_manual_number(tax_text) or 0
+                check_tip = parse_manual_number(tip_text) or 0
+                expected_total = visible_sum + check_tax + check_tip
+                if round(abs(reported_total - expected_total), 2) > 0.01:
+                    st.warning(
+                        f"Items {visible_sum:.2f} + tax {check_tax:.2f} + tip "
+                        f"{check_tip:.2f} = {expected_total:.2f}, but the receipt "
+                        f"says {reported_total:.2f}. "
+                        "Check the items and total; SpendSnap will not change either."
+                    )
+            elif reported_total is not None and reviewed_items:
+                st.info(
+                    "Some item prices are missing, so SpendSnap cannot compare "
+                    "the complete line-item sum with the receipt total."
+                )
+
+        if st.button(
+            "Save transaction",
+            type="primary",
+            disabled=not merchant.strip() or (bool(total_text.strip()) and reported_total is None),
+        ):
+            manual_tax = parse_manual_number(tax_text)
+            manual_tip = parse_manual_number(tip_text)
+            if (tax_text.strip() and manual_tax is None) or (tip_text.strip() and manual_tip is None):
+                st.error("Tax and tip must be numbers, or left blank if unknown.")
+            elif transaction_date.strip() and not is_valid_date(transaction_date.strip()):
+                st.error("Enter the date as YYYY-MM-DD, or leave it blank if unknown.")
+            elif not reviewed_items:
+                st.error("Add at least one named line item before saving.")
             else:
-                visible_sum = line_item_sum(reviewed_items)
-                if reported_total is not None and visible_sum is not None:
-                    if abs(reported_total - visible_sum) > 0.02:
-                        st.warning(
-                            f"Line items add up to {visible_sum:.2f}, while the "
-                            f"reported receipt total is {reported_total:.2f}. "
-                            "Check the items and total; SpendSnap will not change either."
-                        )
-                elif reported_total is not None and reviewed_items:
-                    st.info(
-                        "Some item prices are missing, so SpendSnap cannot compare "
-                        "the complete line-item sum with the receipt total."
-                    )
-
-            if not merchant.strip():
-                st.caption("Enter a merchant name to enable saving.")
-            if st.button(
-                "Save transaction",
-                type="primary",
-                disabled=not merchant.strip() or (bool(total_text.strip()) and reported_total is None),
-            ):
-                manual_tax = parse_manual_number(tax_text)
-                manual_tip = parse_manual_number(tip_text)
-                if (tax_text.strip() and manual_tax is None) or (tip_text.strip() and manual_tip is None):
-                    st.error("Tax and tip must be numbers, or left blank if unknown.")
-                elif transaction_date.strip() and not is_valid_date(transaction_date.strip()):
-                    st.error("Enter the date as YYYY-MM-DD, or leave it blank if unknown.")
-                elif not reviewed_items:
-                    st.error("Add at least one named line item before saving.")
+                new_receipt = {
+                    "merchant": merchant.strip(),
+                    "date": transaction_date.strip() or None,
+                    "currency": currency.strip().upper() or None,
+                    "total": reported_total,
+                    "tax": manual_tax,
+                    "tip": manual_tip,
+                    "items": reviewed_items,
+                }
+                try:
+                    save_receipts(st.session_state.receipts + [new_receipt])
+                except OSError:
+                    st.error("Could not save the receipt to disk. Please try again.")
                 else:
-                    st.session_state.receipts.append(
-                        {
-                            "merchant": merchant.strip(),
-                            "date": transaction_date.strip() or None,
-                            "currency": currency.strip().upper() or None,
-                            "total": reported_total,
-                            "tax": manual_tax,
-                            "tip": manual_tip,
-                            "items": reviewed_items,
-                        }
-                    )
+                    st.session_state.receipts.append(new_receipt)
                     st.session_state.pending_receipt = None
-                    st.success("Saved to this browser session's dashboard.")
+                    st.success("Saved to your dashboard.")
                     st.rerun()
-    elif uploaded_file:
-        with review_col:
-            st.subheader("Review before saving")
-            st.info("Click **Analyze receipt** to read the items. They'll appear here for review.")

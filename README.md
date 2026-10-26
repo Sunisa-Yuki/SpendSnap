@@ -5,7 +5,7 @@ students a simple view of where their everyday spending goes.
 
 ## What the MVP does
 
-- Upload and preview JPG, JPEG, or PNG receipts.
+- Upload and preview JPG, JPEG, PNG, or HEIC (iPhone) receipts.
 - Send the image to a configurable Google Gemini API model for multimodal
   extraction of merchant, date, currency, reported total, tax, tip, and items.
 - Validate the returned JSON, review and edit details, and flag mismatches
@@ -17,8 +17,8 @@ students a simple view of where their everyday spending goes.
   choose (4.33 weeks per month). The estimate is not presented as actual
   recurring spending or guaranteed savings.
 
-Receipts are held only in Streamlit's current browser session; this MVP has no
-database or account system. The image is sent to Google for AI processing when
+Saved receipts are stored on your computer in `data/receipts.json` (ignored by
+git, so they are never pushed); this MVP has no database or account system. The image is sent to Google for AI processing when
 you choose **Analyze receipt**. Avoid uploading sensitive receipts unless you
 are comfortable sharing them with the configured provider.
 
@@ -70,14 +70,14 @@ commit them.
 ## Try a sample receipt
 
 1. Open the app and select **Scan a receipt**.
-2. Choose a clear JPG, JPEG, or PNG receipt image and inspect the preview.
+2. Choose a clear JPG, JPEG, PNG, or HEIC receipt image and inspect the preview.
 3. Read the privacy note, then select **Analyze receipt**.
 4. Review the extracted fields and line items. Correct names, quantity, prices,
    categories, and receipt total as needed.
 5. Compare the line-item warning with the printed receipt. The app never
    overwrites the reported total to make the numbers match.
-6. Select **Save transaction** and view the dashboard. The dashboard and CSV
-   are available for the current browser session.
+6. Select **Save transaction** and view the dashboard. Saved receipts stay
+   on the dashboard after refreshing or restarting the app.
 
 If you do not yet have an API key, the dashboard and local tests still work,
 but live receipt analysis requires a valid key and model access.
