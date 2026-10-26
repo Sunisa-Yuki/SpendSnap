@@ -107,6 +107,14 @@ def _number(value: Any, field_name: str) -> float | None:
     return number
 
 
+# Summary lines that are never purchases, even if a model lists them as items.
+_SUMMARY_LINE = re.compile(
+    r"(sub\s*-?\s*total|total|grand total|(sales )?tax|tip|gratuity|change|"
+    r"balance( due)?|amount due|cash|credit|debit|payment)\b[\s\d.%$()]*",
+    flags=re.IGNORECASE,
+)
+
+
 def validate_receipt(payload: Any) -> dict[str, Any]:
     """Validate model output and normalize it without filling in missing facts."""
     if not isinstance(payload, dict):
@@ -145,6 +153,8 @@ def validate_receipt(payload: Any) -> dict[str, Any]:
             raise ReceiptAIError(
                 "A line item had no readable name. Try a clearer image or edit the receipt."
             )
+        if _SUMMARY_LINE.fullmatch(name.strip()):
+            continue
         category = raw_item.get("category")
         if isinstance(category, str):
             category = next(
@@ -218,6 +228,14 @@ work out what the product is before choosing. Use the type of store as
 context: ready-to-eat food from a grocery or warehouse store such as Costco,
 Walmart, or Trader Joe's is "Groceries", while the same food from a restaurant
 is "Dining out". Use "Other" only when no category fits.
+Add-ons and modifiers (lines starting with "+", "add", or "extra", such as
+"+Brown Sugar Boba", and option lines such as "With straw" or "Less ice") are
+part of the item above them, not separate items. Append them to that item's
+name and add their price to its unit_price and line_total. Receipt prices are
+sometimes printed out of line, so an add-on's price can appear beside the
+"Subtotal" label. Never return subtotal, tax, tip, total, discount, change,
+or payment lines as items. The line_total values should add up to the
+receipt's subtotal; if they do not, recheck which prices belong to which item.
 For every other field, use null when a value is not shown or cannot be read.
 Do not guess, calculate, or substitute missing values. Include only line items visible on the receipt.
 If the image is not a receipt or is unreadable, return an empty items list and
