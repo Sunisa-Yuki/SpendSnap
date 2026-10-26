@@ -5,22 +5,77 @@ from datetime import date, timedelta
 from typing import Any
 
 
-CATEGORIES = (
-    "Drinks",
-    "Food & restaurants",
-    "Groceries",
-    "Shopping",
-    "Transportation",
-    "Other",
-)
+# Each category's description is sent to the AI model to guide its choice.
+CATEGORY_DESCRIPTIONS = {
+    "Groceries": (
+        "Food and ingredients bought to take home, including meat, produce, "
+        "pantry staples, snacks, and ready-to-eat deli items such as rotisserie "
+        "chicken from grocery or warehouse stores"
+    ),
+    "Dining out": (
+        "Meals and food ordered from restaurants, cafes, fast food, food "
+        "trucks, or delivery apps"
+    ),
+    "Coffee & drinks": (
+        "Coffee, tea, boba, smoothies, and other drinks bought at a cafe or "
+        "drink shop"
+    ),
+    "Household & paper products": (
+        "Paper towels, toilet paper, tissues, trash bags, cleaning supplies, "
+        "laundry detergent, dish soap, foil, and food storage"
+    ),
+    "Personal care & health": (
+        "Toiletries, shampoo, toothpaste, skincare, cosmetics, vitamins, "
+        "medicine, and first aid"
+    ),
+    "Clothing & accessories": "Clothes, shoes, bags, and accessories",
+    "Electronics": "Devices, chargers, cables, headphones, and batteries",
+    "School & office supplies": (
+        "Notebooks, pens, paper, printing, textbooks, and other books"
+    ),
+    "Transportation": (
+        "Gas, rideshare, transit fares, parking, tolls, and car maintenance"
+    ),
+    "Entertainment": "Movies, events, games, streaming, and hobbies",
+    "Other": "Anything that does not clearly fit another category",
+}
 
+CATEGORIES = tuple(CATEGORY_DESCRIPTIONS)
+
+# Keyword fallback for items the model leaves uncategorized. The first
+# matching category wins, so more specific categories come first.
 RULES = {
-    "Drinks": (
+    "Household & paper products": (
+        "paper towel",
+        "toilet paper",
+        "bath tissue",
+        "tissue",
+        "napkin",
+        "trash bag",
+        "detergent",
+        "dish soap",
+        "cleaner",
+        "bleach",
+        "foil",
+        "plastic wrap",
+    ),
+    "Personal care & health": (
+        "shampoo",
+        "conditioner",
+        "toothpaste",
+        "deodorant",
+        "lotion",
+        "vitamin",
+        "medicine",
+        "ibuprofen",
+        "bandage",
+    ),
+    "Coffee & drinks": (
         "coffee",
         "matcha",
-        "tea",
         "latte",
         "espresso",
+        "boba",
         "smoothie",
         "juice",
         "soda",
@@ -36,8 +91,12 @@ RULES = {
         "tomato",
         "vegetable",
         "fruit",
-        "market",
-        "supermarket",
+        "chkn",
+        "chicken",
+        "olive oil",
+        "butter",
+        "rice",
+        "cereal",
     ),
     "Transportation": (
         "uber",
@@ -50,34 +109,43 @@ RULES = {
         "fuel",
         "fare",
     ),
-    "Shopping": (
-        "shirt",
-        "clothing",
-        "book",
-        "supplies",
-        "accessory",
+    "Electronics": (
         "charger",
+        "cable",
+        "headphone",
+        "earbud",
+        "battery",
         "electronics",
     ),
-    "Food & restaurants": (
+    "School & office supplies": (
+        "notebook",
+        "pencil",
+        "binder",
+        "printing",
+        "textbook",
+        "book",
+        "supplies",
+    ),
+    "Clothing & accessories": (
+        "shirt",
+        "pants",
+        "jeans",
+        "shoes",
+        "sock",
+        "clothing",
+        "accessory",
+    ),
+    "Dining out": (
         "restaurant",
         "burger",
         "pizza",
         "sandwich",
         "taco",
-        "salad",
         "meal",
         "dining",
         "food",
         "cafe",
-        "chicken",
-        "chkn",
-        "beef",
         "steak",
-        "pork",
-        "fish",
-        "shrimp",
-        "rice",
         "noodle",
         "ramen",
         "pasta",
@@ -95,7 +163,6 @@ RULES = {
     ),
 }
 
-
 def categorize_item(name: str) -> str:
     """Fallback when the AI gives no category; keywords match at word starts only."""
     normalized = name.casefold()
@@ -103,6 +170,17 @@ def categorize_item(name: str) -> str:
         if any(re.search(rf"\b{re.escape(keyword)}", normalized) for keyword in keywords):
             return category
     return "Other"
+
+
+# Category names used before the 11-category list, for receipts saved back then.
+OLD_CATEGORY_NAMES = {"Drinks": "Coffee & drinks", "Food & restaurants": "Dining out"}
+
+
+def current_category(category: str | None, name: str) -> str:
+    """Map a saved item's category onto the current list."""
+    if category in CATEGORIES:
+        return category
+    return OLD_CATEGORY_NAMES.get(category) or categorize_item(name)
 
 
 def amount_for_item(item: dict[str, Any]) -> float | None:

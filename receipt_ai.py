@@ -12,7 +12,7 @@ from typing import Any
 from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
 
-from spending import CATEGORIES
+from spending import CATEGORIES, CATEGORY_DESCRIPTIONS
 
 # iPhone photos are HEIC; this teaches Pillow to open them.
 register_heif_opener()
@@ -145,6 +145,14 @@ def validate_receipt(payload: Any) -> dict[str, Any]:
             raise ReceiptAIError(
                 "A line item had no readable name. Try a clearer image or edit the receipt."
             )
+        category = raw_item.get("category")
+        if isinstance(category, str):
+            category = next(
+                (known for known in CATEGORIES if known.casefold() == category.strip().casefold()),
+                None,
+            )
+        else:
+            category = None
         quantity = _number(raw_item.get("quantity"), "quantity")
         if quantity is not None and quantity <= 0:
             raise ReceiptAIError("A line item had an invalid quantity.")
@@ -181,7 +189,10 @@ def extract_receipt(
     if mime_type not in {"image/jpeg", "image/png"}:
         raise ReceiptAIError("Please upload a JPG, JPEG, or PNG receipt image.")
 
-    category_options = ", ".join(f'"{c}"' for c in CATEGORIES)
+    category_list = ", ".join(f'"{name}"' for name in CATEGORIES)
+    category_guide = "\n".join(
+        f"- {name}: {description}" for name, description in CATEGORY_DESCRIPTIONS.items()
+    )
     prompt = f"""
 Read this receipt image and return only one JSON object with this shape:
 {{
@@ -197,16 +208,19 @@ Read this receipt image and return only one JSON object with this shape:
       "quantity": number or null,
       "unit_price": number or null,
       "line_total": number or null,
-      "category": one of {category_options}
+      "category": one of [{category_list}]
     }}
   ]
 }}
-Use null when a value is not shown or cannot be read. Do not guess, calculate,
-or substitute missing values. Include only line items visible on the receipt.
-For each item's category, use the item and the merchant together: prepared
-food from a restaurant, cafe, or food court is "Food & restaurants"; drinks
-are "Drinks"; uncooked food from a store is "Groceries". Use "Other" only
-when nothing else fits.
+Choose each item's category from this list:
+{category_guide}
+Receipt item names are often abbreviated (for example "CHKN" is chicken), so
+work out what the product is before choosing. Use the type of store as
+context: ready-to-eat food from a grocery or warehouse store such as Costco,
+Walmart, or Trader Joe's is "Groceries", while the same food from a restaurant
+is "Dining out". Use "Other" only when no category fits.
+For every other field, use null when a value is not shown or cannot be read.
+Do not guess, calculate, or substitute missing values. Include only line items visible on the receipt.
 If the image is not a receipt or is unreadable, return an empty items list and
 null for fields you cannot identify. Do not include markdown fences.
 """.strip()
@@ -227,7 +241,10 @@ null for fields you cannot identify. Do not include markdown fences.
                 ],
                 config=types.GenerateContentConfig(
                     temperature=0,
-                    max_output_tokens=4096,
+                    max_output_tokens=8192,
+                    # Long receipts can exhaust the output limit on hidden
+                    # reasoning before any JSON is written.
+                    thinking_config=types.ThinkingConfig(thinking_level="minimal"),
                 ),
             )
         else:
@@ -260,7 +277,8 @@ null for fields you cannot identify. Do not include markdown fences.
         if finish_reason == "MAX_TOKENS":
             raise ReceiptAIError(
                 "Gemma used its response limit before returning receipt data. "
-                "Try a smaller or clearer receipt image, then analyze it again."
+                "Try analyzing it again, or for a very long receipt, upload it "
+                "as two photos and save each part."
             )
         raise ReceiptAIError(
             "The model returned no receipt text. Try a clearer image or analyze "

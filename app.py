@@ -16,13 +16,25 @@ from spending import (
     PERIODS,
     amount_for_item,
     categorize_item,
+    current_category,
     line_item_sum,
     receipt_date,
     receipts_in_period,
 )
 
-# One color per category, in CATEGORIES order (checked for color-blind contrast).
-CATEGORY_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]
+# A chart can only use 8 colors that stay distinct for color-blind readers, so
+# the donut shows the 7 most common student categories and folds the rest into
+# "Everything else". The table below the chart still lists every category.
+CHART_COLORS = {
+    "Groceries": "#2a78d6",
+    "Dining out": "#eb6834",
+    "Coffee & drinks": "#1baf7a",
+    "Household & paper products": "#eda100",
+    "Personal care & health": "#e87ba4",
+    "School & office supplies": "#008300",
+    "Transportation": "#e34948",
+    "Everything else": "#6250d6",
+}
 
 
 def amount_for_saved_item(item: dict[str, Any]) -> float | None:
@@ -149,6 +161,11 @@ st.markdown(
 if "receipts" not in st.session_state:
     try:
         st.session_state.receipts = load_receipts()
+        for saved_receipt in st.session_state.receipts:
+            for saved_item in saved_receipt["items"]:
+                saved_item["category"] = current_category(
+                    saved_item.get("category"), saved_item["name"]
+                )
     except StorageError as exc:
         # Stop instead of starting empty, so the next save can't overwrite the file.
         st.error(f"{exc} Fix or move that file, then refresh the page.")
@@ -265,20 +282,31 @@ with dashboard_tab:
         ].transform("sum")
         summary = summary.sort_values("Spent", ascending=False)
         if summary["Spent"].sum() > 0:
-            chart_data = summary[summary["Spent"] > 0]
+            chart_data = (
+                summary[summary["Spent"] > 0]
+                .assign(
+                    Slice=lambda frame: frame["Category"].where(
+                        frame["Category"].isin(CHART_COLORS), "Everything else"
+                    )
+                )
+                .groupby(["Slice", "Currency"], as_index=False)[["Spent", "Share"]]
+                .sum()
+            )
             chart = alt.Chart(chart_data).mark_arc(
                 innerRadius=70, stroke="#f7f8f5", strokeWidth=2
             ).encode(
                 theta=alt.Theta("Spent:Q", stack=True),
                 color=alt.Color(
-                    "Category:N",
+                    "Slice:N",
                     # Fixed colors per category, so filtering never repaints them.
-                    scale=alt.Scale(domain=list(CATEGORIES), range=CATEGORY_COLORS),
+                    scale=alt.Scale(
+                        domain=list(CHART_COLORS), range=list(CHART_COLORS.values())
+                    ),
                     legend=alt.Legend(title=None),
                 ),
                 order=alt.Order("Spent:Q", sort="descending"),
                 tooltip=[
-                    "Category",
+                    alt.Tooltip("Slice:N", title="Category"),
                     "Currency",
                     alt.Tooltip("Spent:Q", format=".2f"),
                     alt.Tooltip("Share:Q", format=".0%"),
