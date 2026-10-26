@@ -5,3 +5,5 @@ backgroundColor = "#f7f8f5"
 secondaryBackgroundColor = "#ffffff"
 textColor = "#24352d"
 font = "sans serif"
+# Default is 16. A larger base size makes the whole app open slightly zoomed in.
+baseFontSize = 18
