@@ -61,6 +61,21 @@ class ReceiptValidationTests(unittest.TestCase):
         categories = [item["category"] for item in result["items"]]
         self.assertEqual(categories, ["Groceries", None, None])
 
+    def test_summary_lines_are_not_kept_as_items(self):
+        result = validate_receipt(
+            {
+                "items": [
+                    {"name": "Cloud Jasmine Tea + Brown Sugar Boba", "line_total": 6.48},
+                    {"name": "Subtotal", "line_total": 0.99},
+                    {"name": "Sales Tax 0%", "line_total": 0},
+                    {"name": "Total ($)", "line_total": 13.47},
+                    {"name": "Tip Jar Cookie", "line_total": 2.5},
+                ]
+            }
+        )
+        names = [item["name"] for item in result["items"]]
+        self.assertEqual(names, ["Cloud Jasmine Tea + Brown Sugar Boba", "Tip Jar Cookie"])
+
     def test_ambiguous_currency_symbol_stays_unknown(self):
         result = validate_receipt({"currency": "$", "items": []})
         self.assertIsNone(result["currency"])

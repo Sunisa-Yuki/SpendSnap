@@ -345,184 +345,198 @@ with scan_tab:
         help="JPG, JPEG, and PNG images are supported.",
     )
 
+    # Once a receipt is chosen, show its preview in a narrow left column and
+    # the review form beside it.
     if uploaded_file:
-        image_bytes = uploaded_file.getvalue()
-        try:
-            with Image.open(BytesIO(image_bytes)) as image:
-                image_format = image.format
-                image.verify()
-            if image_format not in {"JPEG", "PNG"}:
-                raise UnidentifiedImageError("Unsupported image format")
-            st.image(image_bytes, caption="Receipt preview", width="stretch")
-        except (UnidentifiedImageError, OSError):
-            st.error("That file could not be opened as an image. Please try another one.")
-            image_bytes = b""
+        preview_col, review_col = st.columns([1, 2.5], gap="large")
+    else:
+        preview_col = review_col = st.container()
 
-        if image_bytes:
-            st.caption(
-                f"Selected image: {len(image_bytes) / (1024 * 1024):.1f} MB. "
-                "Large photos can take longer to upload and analyze."
-            )
+    if uploaded_file:
+        with preview_col:
+            image_bytes = uploaded_file.getvalue()
+            try:
+                with Image.open(BytesIO(image_bytes)) as image:
+                    image_format = image.format
+                    image.verify()
+                if image_format not in {"JPEG", "PNG"}:
+                    raise UnidentifiedImageError("Unsupported image format")
+                # A fixed-height box keeps long receipts from stretching the page.
+                with st.container(height=520):
+                    st.image(image_bytes, caption="Receipt preview", width="stretch")
+            except (UnidentifiedImageError, OSError):
+                st.error("That file could not be opened as an image. Please try another one.")
+                image_bytes = b""
 
-        analyze_clicked = st.button(
-            "Analyze receipt",
-            type="primary",
-            disabled=not image_bytes,
-            width="stretch",
-        )
-        if analyze_clicked:
-            st.session_state.pending_receipt = None
-            api_key = os.getenv("GEMINI_API_KEY")
-            if not api_key:
-                st.error(
-                    "Add GEMINI_API_KEY to your local .env file, then restart "
-                    "Streamlit to analyze a receipt."
+            if image_bytes:
+                st.caption(
+                    f"Selected image: {len(image_bytes) / (1024 * 1024):.1f} MB. "
+                    "Large photos can take longer to upload and analyze."
                 )
-            else:
-                try:
-                    prepared_bytes, mime_type = prepare_receipt_image(image_bytes)
-                    st.caption(
-                        f"Sending an optimized {len(prepared_bytes) / 1024:.0f} KB "
-                        "image to the AI provider."
-                    )
-                    with st.spinner(
-                        f"Sending the receipt to {MODEL_NAME} and reading its items…"
-                    ):
-                        extracted = extract_receipt(
-                            image_bytes=prepared_bytes,
-                            mime_type=mime_type,
-                            model_name=MODEL_NAME,
-                            api_key=api_key,
-                        )
-                    extracted["currency"] = extracted.get("currency")
-                    st.session_state.pending_receipt = extracted
-                    st.session_state.pending_id = uuid.uuid4().hex
-                    st.success("Receipt analyzed. Review the details before saving.")
-                except ReceiptAIError as exc:
-                    st.error(str(exc))
-                except Exception:
+
+            analyze_clicked = st.button(
+                "Analyze receipt",
+                type="primary",
+                disabled=not image_bytes,
+                width="stretch",
+            )
+            if analyze_clicked:
+                st.session_state.pending_receipt = None
+                api_key = os.getenv("GEMINI_API_KEY")
+                if not api_key:
                     st.error(
-                        "The receipt could not be analyzed due to an unexpected "
-                        "application error. Please try again."
+                        "Add GEMINI_API_KEY to your local .env file, then restart "
+                        "Streamlit to analyze a receipt."
                     )
+                else:
+                    try:
+                        prepared_bytes, mime_type = prepare_receipt_image(image_bytes)
+                        st.caption(
+                            f"Sending an optimized {len(prepared_bytes) / 1024:.0f} KB "
+                            "image to the AI provider."
+                        )
+                        with st.spinner(
+                            f"Sending the receipt to {MODEL_NAME} and reading its items…"
+                        ):
+                            extracted = extract_receipt(
+                                image_bytes=prepared_bytes,
+                                mime_type=mime_type,
+                                model_name=MODEL_NAME,
+                                api_key=api_key,
+                            )
+                        extracted["currency"] = extracted.get("currency")
+                        st.session_state.pending_receipt = extracted
+                        st.session_state.pending_id = uuid.uuid4().hex
+                        st.success("Receipt analyzed. Review the details before saving.")
+                    except ReceiptAIError as exc:
+                        st.error(str(exc))
+                    except Exception:
+                        st.error(
+                            "The receipt could not be analyzed due to an unexpected "
+                            "application error. Please try again."
+                        )
 
     pending = st.session_state.pending_receipt
     if pending:
-        st.divider()
-        st.subheader("Review before saving")
-        st.caption(
-            "AI extraction can make mistakes. Check the receipt and correct "
-            "anything that looks off. Blank fields mean the value was not identified."
-        )
-        info_col1, info_col2 = st.columns(2)
-        with info_col1:
-            merchant = st.text_input(
-                "Merchant",
-                value=pending.get("merchant") or "",
-                key=f"merchant-{st.session_state.pending_id}",
+        with review_col:
+            st.subheader("Review before saving")
+            st.caption(
+                "AI extraction can make mistakes. Check the receipt and correct "
+                "anything that looks off. Blank fields mean the value was not identified."
             )
-            transaction_date = st.text_input(
-                "Date (YYYY-MM-DD, if known)",
-                value=pending.get("date") or "",
-                key=f"date-{st.session_state.pending_id}",
-            )
-            currency = st.text_input(
-                "Currency code (if known)",
-                value=pending.get("currency") or "",
-                key=f"currency-{st.session_state.pending_id}",
-            )
-        with info_col2:
-            total_text = st.text_input(
-                "Reported receipt total (leave blank if not shown)",
-                value=display_number(pending.get("total")),
-                key=f"total-{st.session_state.pending_id}",
-            )
-            tax_text = st.text_input(
-                "Tax (if shown)",
-                value=display_number(pending.get("tax")),
-                key=f"tax-{st.session_state.pending_id}",
-            )
-            tip_text = st.text_input(
-                "Tip (if shown)",
-                value=display_number(pending.get("tip")),
-                key=f"tip-{st.session_state.pending_id}",
-            )
-
-        initial_items = []
-        for item in pending["items"]:
-            initial_items.append(
-                {
-                    "Item": item["name"],
-                    "Quantity": item.get("quantity"),
-                    "Unit price": item.get("unit_price"),
-                    "Line total": item.get("line_total"),
-                    "Category": item.get("category") or categorize_item(item["name"]),
-                }
-            )
-        edited_items = st.data_editor(
-            pd.DataFrame(
-                initial_items,
-                columns=["Item", "Quantity", "Unit price", "Line total", "Category"],
-            ),
-            key=f"items-{st.session_state.pending_id}",
-            num_rows="dynamic",
-            width="stretch",
-            hide_index=True,
-            column_config={
-                "Item": st.column_config.TextColumn("Item"),
-                "Quantity": st.column_config.NumberColumn("Quantity", min_value=0.01),
-                "Unit price": st.column_config.NumberColumn("Unit price", min_value=0.0),
-                "Line total": st.column_config.NumberColumn("Line total", min_value=0.0),
-                "Category": st.column_config.SelectboxColumn(
-                    "Category", options=CATEGORIES, required=True
-                ),
-            },
-        )
-
-        reviewed_items = edited_items_to_records(edited_items)
-        reported_total = parse_manual_number(total_text)
-        if total_text.strip() and reported_total is None:
-            st.warning("The receipt total must be a number, or left blank if unknown.")
-        else:
-            visible_sum = line_item_sum(reviewed_items)
-            if reported_total is not None and visible_sum is not None:
-                if abs(reported_total - visible_sum) > 0.02:
-                    st.warning(
-                        f"Line items add up to {visible_sum:.2f}, while the "
-                        f"reported receipt total is {reported_total:.2f}. "
-                        "Check the items and total; SpendSnap will not change either."
-                    )
-            elif reported_total is not None and reviewed_items:
-                st.info(
-                    "Some item prices are missing, so SpendSnap cannot compare "
-                    "the complete line-item sum with the receipt total."
+            info_col1, info_col2 = st.columns(2)
+            with info_col1:
+                merchant = st.text_input(
+                    "Merchant",
+                    value=pending.get("merchant") or "",
+                    key=f"merchant-{st.session_state.pending_id}",
+                )
+                transaction_date = st.text_input(
+                    "Date (YYYY-MM-DD, if known)",
+                    value=pending.get("date") or "",
+                    key=f"date-{st.session_state.pending_id}",
+                )
+                currency = st.text_input(
+                    "Currency code (if known)",
+                    value=pending.get("currency") or "",
+                    key=f"currency-{st.session_state.pending_id}",
+                )
+            with info_col2:
+                total_text = st.text_input(
+                    "Reported receipt total (leave blank if not shown)",
+                    value=display_number(pending.get("total")),
+                    key=f"total-{st.session_state.pending_id}",
+                )
+                tax_text = st.text_input(
+                    "Tax (if shown)",
+                    value=display_number(pending.get("tax")),
+                    key=f"tax-{st.session_state.pending_id}",
+                )
+                tip_text = st.text_input(
+                    "Tip (if shown)",
+                    value=display_number(pending.get("tip")),
+                    key=f"tip-{st.session_state.pending_id}",
                 )
 
-        if st.button(
-            "Save transaction",
-            type="primary",
-            disabled=not merchant.strip() or (bool(total_text.strip()) and reported_total is None),
-        ):
-            manual_tax = parse_manual_number(tax_text)
-            manual_tip = parse_manual_number(tip_text)
-            if (tax_text.strip() and manual_tax is None) or (tip_text.strip() and manual_tip is None):
-                st.error("Tax and tip must be numbers, or left blank if unknown.")
-            elif transaction_date.strip() and not is_valid_date(transaction_date.strip()):
-                st.error("Enter the date as YYYY-MM-DD, or leave it blank if unknown.")
-            elif not reviewed_items:
-                st.error("Add at least one named line item before saving.")
-            else:
-                st.session_state.receipts.append(
+            initial_items = []
+            for item in pending["items"]:
+                initial_items.append(
                     {
-                        "merchant": merchant.strip(),
-                        "date": transaction_date.strip() or None,
-                        "currency": currency.strip().upper() or None,
-                        "total": reported_total,
-                        "tax": manual_tax,
-                        "tip": manual_tip,
-                        "items": reviewed_items,
+                        "Item": item["name"],
+                        "Quantity": item.get("quantity"),
+                        "Unit price": item.get("unit_price"),
+                        "Line total": item.get("line_total"),
+                        "Category": item.get("category") or categorize_item(item["name"]),
                     }
                 )
-                st.session_state.pending_receipt = None
-                st.success("Saved to this browser session's dashboard.")
-                st.rerun()
+            edited_items = st.data_editor(
+                pd.DataFrame(
+                    initial_items,
+                    columns=["Item", "Quantity", "Unit price", "Line total", "Category"],
+                ),
+                key=f"items-{st.session_state.pending_id}",
+                num_rows="dynamic",
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Item": st.column_config.TextColumn("Item"),
+                    "Quantity": st.column_config.NumberColumn("Quantity", min_value=0.01),
+                    "Unit price": st.column_config.NumberColumn("Unit price", min_value=0.0),
+                    "Line total": st.column_config.NumberColumn("Line total", min_value=0.0),
+                    "Category": st.column_config.SelectboxColumn(
+                        "Category", options=CATEGORIES, required=True
+                    ),
+                },
+            )
+
+            reviewed_items = edited_items_to_records(edited_items)
+            reported_total = parse_manual_number(total_text)
+            if total_text.strip() and reported_total is None:
+                st.warning("The receipt total must be a number, or left blank if unknown.")
+            else:
+                visible_sum = line_item_sum(reviewed_items)
+                if reported_total is not None and visible_sum is not None:
+                    if abs(reported_total - visible_sum) > 0.02:
+                        st.warning(
+                            f"Line items add up to {visible_sum:.2f}, while the "
+                            f"reported receipt total is {reported_total:.2f}. "
+                            "Check the items and total; SpendSnap will not change either."
+                        )
+                elif reported_total is not None and reviewed_items:
+                    st.info(
+                        "Some item prices are missing, so SpendSnap cannot compare "
+                        "the complete line-item sum with the receipt total."
+                    )
+
+            if st.button(
+                "Save transaction",
+                type="primary",
+                disabled=not merchant.strip() or (bool(total_text.strip()) and reported_total is None),
+            ):
+                manual_tax = parse_manual_number(tax_text)
+                manual_tip = parse_manual_number(tip_text)
+                if (tax_text.strip() and manual_tax is None) or (tip_text.strip() and manual_tip is None):
+                    st.error("Tax and tip must be numbers, or left blank if unknown.")
+                elif transaction_date.strip() and not is_valid_date(transaction_date.strip()):
+                    st.error("Enter the date as YYYY-MM-DD, or leave it blank if unknown.")
+                elif not reviewed_items:
+                    st.error("Add at least one named line item before saving.")
+                else:
+                    st.session_state.receipts.append(
+                        {
+                            "merchant": merchant.strip(),
+                            "date": transaction_date.strip() or None,
+                            "currency": currency.strip().upper() or None,
+                            "total": reported_total,
+                            "tax": manual_tax,
+                            "tip": manual_tip,
+                            "items": reviewed_items,
+                        }
+                    )
+                    st.session_state.pending_receipt = None
+                    st.success("Saved to this browser session's dashboard.")
+                    st.rerun()
+    elif uploaded_file:
+        with review_col:
+            st.subheader("Review before saving")
+            st.info("Click **Analyze receipt** to read the items. They'll appear here for review.")
