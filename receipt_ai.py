@@ -156,14 +156,13 @@ def validate_receipt(payload: Any) -> dict[str, Any]:
         quantity = _number(raw_item.get("quantity"), "quantity")
         if quantity is not None and quantity <= 0:
             raise ReceiptAIError("A line item had an invalid quantity.")
-        category = raw_item.get("category")
         items.append(
             {
                 "name": name.strip(),
                 "quantity": quantity,
                 "unit_price": _number(raw_item.get("unit_price"), "unit price"),
                 "line_total": _number(raw_item.get("line_total"), "line total"),
-                "category": category if category in CATEGORIES else None,
+                "category": category,
             }
         )
 
