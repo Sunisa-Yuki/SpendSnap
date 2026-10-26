@@ -221,6 +221,10 @@ work out what the product is before choosing. Use the type of store as
 context: ready-to-eat food from a grocery or warehouse store such as Costco,
 Walmart, or Trader Joe's is "Groceries", while the same food from a restaurant
 is "Dining out". Use "Other" only when no category fits.
+For "merchant", return the business or brand name printed on the receipt
+(often in the header or logo text). Store numbers, order types such as
+"Dine-in" or "To go", addresses, phone numbers, and cashier names are not the
+merchant. If no business name is printed, use null for merchant.
 Add-ons and modifiers (lines starting with "+", "add", or "extra", such as
 "+Brown Sugar Boba", and option lines such as "With straw" or "Less ice") are
 part of the item above them, not separate items. Append them to that item's

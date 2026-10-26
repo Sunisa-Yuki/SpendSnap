@@ -271,7 +271,31 @@ with dashboard_tab:
                 for receipt in receipts
             ]
         )
-        st.dataframe(details, width="stretch", hide_index=True)
+        edited_details = st.data_editor(
+            details,
+            key="receipt-details",
+            width="stretch",
+            hide_index=True,
+            disabled=["Date", "Total", "Currency", "Items"],
+            column_config={
+                "Merchant": st.column_config.TextColumn(
+                    "Merchant ✎", help="Double-click a merchant name to correct it."
+                ),
+            },
+        )
+        merchant_changed = False
+        for index, (old_name, new_name) in enumerate(
+            zip(details["Merchant"], edited_details["Merchant"])
+        ):
+            new_name = (new_name or "").strip()
+            # Ignore blanked cells so a saved receipt always keeps a merchant.
+            if new_name and new_name != old_name:
+                receipts[index]["merchant"] = new_name
+                merchant_changed = True
+        if merchant_changed:
+            # Rerun so the line-item table and what-if picker show the new name.
+            st.rerun()
+        st.caption("Double-click a merchant name above to correct it.")
         if item_rows:
             st.caption("All extracted line items (blank amounts were not identified)")
             st.dataframe(pd.DataFrame(item_rows), width="stretch", hide_index=True)
@@ -424,12 +448,18 @@ with scan_tab:
                 "AI extraction can make mistakes. Check the receipt and correct "
                 "anything that looks off. Blank fields mean the value was not identified."
             )
+            if not pending.get("merchant"):
+                st.warning(
+                    "SpendSnap couldn't tell which store this receipt is from. "
+                    "Enter the store name below to save it."
+                )
             info_col1, info_col2 = st.columns(2)
             with info_col1:
                 merchant = st.text_input(
                     "Merchant",
                     value=pending.get("merchant") or "",
                     key=f"merchant-{st.session_state.pending_id}",
+                    placeholder="Store name, e.g. HeyTea",
                 )
                 transaction_date = st.text_input(
                     "Date (YYYY-MM-DD, if known)",
@@ -508,6 +538,8 @@ with scan_tab:
                         "the complete line-item sum with the receipt total."
                     )
 
+            if not merchant.strip():
+                st.caption("Enter a merchant name to enable saving.")
             if st.button(
                 "Save transaction",
                 type="primary",
