@@ -14,12 +14,17 @@ from storage import StorageError, load_receipts, save_receipts
 from spending import (
     CATEGORIES,
     PERIODS,
+    SMALL_PURCHASE_LIMIT,
+    WEEKS_PER_MONTH,
     amount_for_item,
     categorize_item,
     current_category,
+    is_small_purchase,
     line_item_sum,
+    monthly_estimate,
     receipt_date,
     receipts_in_period,
+    saving_suggestion,
 )
 
 # A chart can only use 8 colors that stay distinct for color-blind readers, so
@@ -364,19 +369,31 @@ with dashboard_tab:
                 mime="text/csv",
             )
 
-        st.subheader("A small-spend what-if")
+        st.subheader("Monthly estimates and saving insights")
         all_items = [
             (receipt, item)
             for receipt in receipts
             for item in receipt["items"]
             if amount_for_saved_item(item) is not None
         ]
+        small_items = [
+            (receipt, item)
+            for receipt, item in all_items
+            if is_small_purchase(amount_for_saved_item(item))
+        ]
         if all_items:
+            only_small = st.toggle(
+                f"Only small purchases ({SMALL_PURCHASE_LIMIT:g} or less)",
+                value=bool(small_items),
+                disabled=not small_items,
+                help="Small, frequent buys like coffee or snacks add up fastest.",
+            )
+            picker_items = small_items if only_small else all_items
             choices = [
                 f"{receipt.get('merchant') or 'Receipt'} — {item['name']} "
                 f"({receipt.get('currency') or ''} "
                 f"{amount_for_saved_item(item):.2f})"
-                for receipt, item in all_items
+                for receipt, item in picker_items
             ]
             selected_index = st.selectbox(
                 "Pick a purchase to estimate",
@@ -390,19 +407,33 @@ with dashboard_tab:
                 value=5,
                 step=1,
             )
-            selected_receipt, selected_item = all_items[selected_index]
-            monthly_estimate = (
-                amount_for_saved_item(selected_item) * repeats_per_week * 4.33
-            )
+            selected_receipt, selected_item = picker_items[selected_index]
+            selected_amount = amount_for_saved_item(selected_item)
             selected_currency = selected_receipt.get("currency") or ""
-            st.success(
-                f"That would be about {selected_currency} {monthly_estimate:,.2f} "
-                "per month."
+            estimate = monthly_estimate(selected_amount, repeats_per_week)
+            suggestion = saving_suggestion(
+                selected_item["category"], selected_amount, repeats_per_week
             )
+
+            estimate_col, saving_col = st.columns(2)
+            estimate_col.metric(
+                "Hypothetical monthly cost",
+                f"{selected_currency} {estimate:,.2f}",
+                help="Estimate, not your actual spending.",
+            )
+            saving_col.metric(
+                "Hypothetical monthly saving",
+                f"{selected_currency} {suggestion['monthly_saving']:,.2f}",
+                help="Estimate, not a guaranteed saving.",
+            )
+            st.info(f"**Saving idea:** {suggestion['tip']}")
             st.caption(
-                "Hypothetical estimate only: it assumes the selected receipt's "
-                "line-item amount and your chosen weekly frequency for 4.33 weeks. "
-                "It is not a claim about your purchase history or guaranteed savings."
+                f"Hypothetical estimates only: {selected_currency} "
+                f"{selected_amount:.2f} × {repeats_per_week} a week × "
+                f"{WEEKS_PER_MONTH} weeks a month. The saving assumes "
+                f"{suggestion['fewer_per_week']:g} fewer purchase(s) a week and "
+                "doesn't subtract what the swap costs. Neither number is your "
+                "real purchase history or a guaranteed saving."
             )
         else:
             st.caption(
